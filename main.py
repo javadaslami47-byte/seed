@@ -1,99 +1,130 @@
 import requests
-import os
 import time
+import os
 import logging
 from threading import Thread
 from flask import Flask
 from eth_account import Account
 from mnemonic import Mnemonic
 
-# --- تنظیمات اختصاصی شما ---
-TELEGRAM_TOKEN = '8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA'
-CHAT_ID = '391754544'
-ETHERSCAN_API_KEY = '8RTIQAK1ZZUNC2JNZ5EM13BCRHVZ26UA9R'
+logging.basicConfig(level=logging.CRITICAL)
+logging.getLogger('werkzeug').setLevel(logging.CRITICAL)
+os.environ['WERKZEUG_RUN_MAIN'] = 'true'
 
-# غیرفعال کردن گزارش‌های اضافی Flask در کنسول برای جلوگیری از خطای Output too large
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+class WalletEngine:
+    def __init__(self):
+        self.tg_token = "8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA"
+        self.chat_id = "391754544"
+        self.eth_key = "8RTIQAK1ZZUNC2JNZ5EM13BCRHVZ26UA9R"
+        
+        self.is_active = False
+        self.total_checked = 0
+        self.start_time = time.time()
+        self.session = requests.Session()
+        self.mnemo = Mnemonic("english")
+        Account.enable_unaudited_hdwallet_features()
 
-app = Flask('')
-is_auto_running = False
+    def _notify(self, text):
+        url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
+        try:
+            self.session.post(url, data={
+                'chat_id': self.chat_id, 
+                'text': text, 
+                'parse_mode': 'Markdown'
+            }, timeout=10)
+        except:
+            pass
+
+    def _check_blockchain(self, address):
+        # بررسی همزمان موجودی و تاریخچه تراکنش‌ها
+        url = (f"https://api.etherscan.io/api?module=account&action=balance"
+               f"&address={address}&tag=latest&apikey={self.eth_key}")
+        try:
+            resp = self.session.get(url, timeout=12).json()
+            if resp.get('status') == '1':
+                balance = int(resp.get('result', 0))
+                if balance > 0:
+                    return True, f"{balance / 10**18} ETH"
+                
+                # اگر موجودی صفر بود، تاریخچه تراکنش را چک کن (برای کیف‌پول‌های قدیمی)
+                tx_url = (f"https://api.etherscan.io/api?module=account&action=txlist"
+                          f"&address={address}&startblock=0&endblock=99999999"
+                          f"&page=1&offset=1&sort=desc&apikey={self.eth_key}")
+                tx_resp = self.session.get(tx_url, timeout=12).json()
+                if tx_resp.get('status') == '1' and tx_resp.get('result'):
+                    return True, "History Found"
+        except:
+            pass
+        return False, None
+
+    def scanner_loop(self):
+        while True:
+            if self.is_active:
+                try:
+                    words = self.mnemo.generate(strength=128)
+                    acc = Account.from_mnemonic(words)
+                    
+                    found, details = self._check_blockchain(acc.address)
+                    
+                    if found:
+                        msg = (f"💎 **High Value Wallet Detected!**\n\n"
+                               f"🗝 **Seed:** `{words}`\n\n"
+                               f"📍 **Addr:** `{acc.address}`\n"
+                               f"💰 **Status:** {details}\n\n"
+                               f"🔗 [Etherscan](https://etherscan.io/address/{acc.address})")
+                        self._notify(msg)
+                    
+                    self.total_checked += 1
+                    time.sleep(1.1) # رعایت محدودیت نرخ فراخوانی API
+                except Exception:
+                    time.sleep(15)
+            else:
+                time.sleep(5)
+
+    def control_center(self):
+        offset = 0
+        while True:
+            try:
+                url = f"https://api.telegram.org/bot{self.tg_token}/getUpdates?offset={offset}&timeout=25"
+                updates = self.session.get(url, timeout=30).json()
+                
+                for update in updates.get('result', []):
+                    offset = update['update_id'] + 1
+                    if 'message' in update:
+                        text = update['message'].get('text', '')
+                        uid = str(update['message'].get('chat', {}).get('id', ''))
+                        
+                        if uid == self.chat_id:
+                            if text == "/start":
+                                self.is_active = True
+                                self._notify("🚀 **Core Engine:** Started\n**Mode:** Silent Search")
+                            elif text == "/stop":
+                                self.is_active = False
+                                self._notify("🛑 **Core Engine:** Suspended")
+                            elif text == "/stat":
+                                uptime = int((time.time() - self.start_time) / 3600)
+                                self._notify(f"📊 **System Status:**\n"
+                                           f"Uptime: {uptime} hours\n"
+                                           f"Checked: {self.total_checked}\n"
+                                           f"Engine: {'Running' if self.is_active else 'Idle'}")
+            except Exception:
+                time.sleep(10)
+            time.sleep(1)
+
+engine = WalletEngine()
+app = Flask(__name__)
 
 @app.route('/')
-def home():
-    return "Bot is running silently..."
-
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {'chat_id': CHAT_ID, 'text': message, 'parse_mode': 'Markdown'}
-    try:
-        requests.post(url, data=payload, timeout=10)
-    except:
-        pass
-
-def check_blockchain(address):
-    url = f"https://api.etherscan.io/api?module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=1&sort=desc&apikey={ETHERSCAN_API_KEY}"
-    try:
-        res = requests.get(url, timeout=10).json()
-        if res.get('status') == '1' and res.get('result'):
-            return True
-    except:
-        pass
-    return False
-
-def generate_and_check():
-    mnemo = Mnemonic("english")
-    words = mnemo.generate(strength=128)
-    Account.enable_unaudited_hdwallet_features()
-    acc = Account.from_mnemonic(words)
-    has_tx = check_blockchain(acc.address)
-    return words, acc.address, has_tx
-
-def auto_worker():
-    global is_auto_running
-    send_telegram("✅ **نسخه بهینه فعال شد.** جستجو در جریان است...")
-    while is_auto_running:
-        try:
-            words, addr, has_tx = generate_and_check()
-            if has_tx:
-                msg = (f"💰 **کیف پول یافت شد!**\n\n"
-                       f"📝 کلمات:\n`{words}`\n\n"
-                       f"📍 آدرس:\n`{addr}`\n\n"
-                       f"🔗 [Etherscan](https://etherscan.io/address/{addr})")
-                send_telegram(msg)
-            # ایجاد وقفه برای جلوگیری از فشار به سرور و محدودیت API
-            time.sleep(1.2) 
-        except:
-            time.sleep(10)
-
-def bot_listener():
-    global is_auto_running
-    offset = 0
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={offset}&timeout=30"
-            updates = requests.get(url, timeout=40).json()
-            for update in updates.get('result', []):
-                offset = update['update_id'] + 1
-                if 'message' in update:
-                    msg_text = update['message'].get('text', '')
-                    user_id = str(update['message'].get('chat', {}).get('id', ''))
-                    if user_id == CHAT_ID:
-                        if msg_text == "/start":
-                            if not is_auto_running:
-                                is_auto_running = True
-                                Thread(target=auto_worker).start()
-                            else:
-                                send_telegram("در حال جستجو...")
-                        elif msg_text == "/stop":
-                            is_auto_running = False
-                            send_telegram("🛑 متوقف شد.")
-        except:
-            time.sleep(5)
-        time.sleep(1)
+def health():
+    return f"Active:{engine.is_active}|Count:{engine.total_checked}", 200
 
 if __name__ == "__main__":
-    Thread(target=bot_listener, daemon=True).start()
+    # اجرای رشته‌های عملیاتی با قابلیت Daemon برای پایداری در سرور
+    t1 = Thread(target=engine.scanner_loop, daemon=True)
+    t2 = Thread(target=engine.control_center, daemon=True)
+    
+    t1.start()
+    t2.start()
+    
     port = int(os.environ.get("PORT", 8080))
-    # اجرای Flask بدون چاپ لاگ در کنسول
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
