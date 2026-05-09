@@ -7,7 +7,7 @@ from flask import Flask
 from eth_account import Account
 from mnemonic import Mnemonic
 
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.INFO)
 logging.getLogger('werkzeug').setLevel(logging.CRITICAL)
 os.environ['WERKZEUG_RUN_MAIN'] = 'true'
 
@@ -32,29 +32,28 @@ class WalletEngine:
                 'text': text, 
                 'parse_mode': 'Markdown'
             }, timeout=10)
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Telegram notify error: {e}")
 
     def _check_blockchain(self, address):
-        # بررسی همزمان موجودی و تاریخچه تراکنش‌ها
-        url = (f"https://api.etherscan.io/api?module=account&action=balance"
-               f"&address={address}&tag=latest&apikey={self.eth_key}")
         try:
+            url = (f"https://api.etherscan.io/api?module=account&action=balance"
+                   f"&address={address}&tag=latest&apikey={self.eth_key}")
             resp = self.session.get(url, timeout=12).json()
             if resp.get('status') == '1':
                 balance = int(resp.get('result', 0))
                 if balance > 0:
                     return True, f"{balance / 10**18} ETH"
-                
-                # اگر موجودی صفر بود، تاریخچه تراکنش را چک کن (برای کیف‌پول‌های قدیمی)
-                tx_url = (f"https://api.etherscan.io/api?module=account&action=txlist"
-                          f"&address={address}&startblock=0&endblock=99999999"
-                          f"&page=1&offset=1&sort=desc&apikey={self.eth_key}")
-                tx_resp = self.session.get(tx_url, timeout=12).json()
-                if tx_resp.get('status') == '1' and tx_resp.get('result'):
+
+            tx_url = (f"https://api.etherscan.io/api?module=account&action=txlist"
+                      f"&address={address}&startblock=0&endblock=99999999"
+                      f"&page=1&offset=10&sort=desc&apikey={self.eth_key}")
+            tx_resp = self.session.get(tx_url, timeout=12).json()
+            if tx_resp.get('status') == '1' and tx_resp.get('result'):
+                if len(tx_resp.get('result')) > 0:
                     return True, "History Found"
-        except:
-            pass
+        except Exception as e:
+            logging.error(f"Blockchain check error: {e}")
         return False, None
 
     def scanner_loop(self):
@@ -63,9 +62,7 @@ class WalletEngine:
                 try:
                     words = self.mnemo.generate(strength=128)
                     acc = Account.from_mnemonic(words)
-                    
                     found, details = self._check_blockchain(acc.address)
-                    
                     if found:
                         msg = (f"💎 **High Value Wallet Detected!**\n\n"
                                f"🗝 **Seed:** `{words}`\n\n"
@@ -73,10 +70,10 @@ class WalletEngine:
                                f"💰 **Status:** {details}\n\n"
                                f"🔗 [Etherscan](https://etherscan.io/address/{acc.address})")
                         self._notify(msg)
-                    
                     self.total_checked += 1
-                    time.sleep(1.1) # رعایت محدودیت نرخ فراخوانی API
-                except Exception:
+                    time.sleep(1.1)
+                except Exception as e:
+                    logging.error(f"Scanner loop error: {e}")
                     time.sleep(15)
             else:
                 time.sleep(5)
@@ -87,13 +84,11 @@ class WalletEngine:
             try:
                 url = f"https://api.telegram.org/bot{self.tg_token}/getUpdates?offset={offset}&timeout=25"
                 updates = self.session.get(url, timeout=30).json()
-                
                 for update in updates.get('result', []):
                     offset = update['update_id'] + 1
                     if 'message' in update:
                         text = update['message'].get('text', '')
                         uid = str(update['message'].get('chat', {}).get('id', ''))
-                        
                         if uid == self.chat_id:
                             if text == "/start":
                                 self.is_active = True
@@ -107,7 +102,8 @@ class WalletEngine:
                                            f"Uptime: {uptime} hours\n"
                                            f"Checked: {self.total_checked}\n"
                                            f"Engine: {'Running' if self.is_active else 'Idle'}")
-            except Exception:
+            except Exception as e:
+                logging.error(f"Control center error: {e}")
                 time.sleep(10)
             time.sleep(1)
 
@@ -119,12 +115,9 @@ def health():
     return f"Active:{engine.is_active}|Count:{engine.total_checked}", 200
 
 if __name__ == "__main__":
-    # اجرای رشته‌های عملیاتی با قابلیت Daemon برای پایداری در سرور
     t1 = Thread(target=engine.scanner_loop, daemon=True)
     t2 = Thread(target=engine.control_center, daemon=True)
-    
     t1.start()
     t2.start()
-    
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
