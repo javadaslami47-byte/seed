@@ -1,3 +1,4 @@
+# main.py
 import requests
 import time
 import os
@@ -13,9 +14,9 @@ os.environ['WERKZEUG_RUN_MAIN'] = 'true'
 
 class WalletEngine:
     def __init__(self):
-        self.tg_token = "8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA"
-        self.chat_id = "391754544"
-        self.eth_key = "8RTIQAK1ZZUNC2JNZ5EM13BCRHVZ26UA9R"
+        self.tg_token = os.environ.get("TG_TOKEN", "")
+        self.chat_id = os.environ.get("CHAT_ID", "")
+        self.eth_key = os.environ.get("ETH_KEY", "")
         
         self.is_active = False
         self.total_checked = 0
@@ -44,6 +45,14 @@ class WalletEngine:
                 balance = int(resp.get('result', 0))
                 if balance > 0:
                     return True, f"{balance / 10**18} ETH"
+
+            tx_url = (f"https://api.etherscan.io/api?module=account&action=txlist"
+                      f"&address={address}&startblock=0&endblock=99999999"
+                      f"&page=1&offset=10&sort=desc&apikey={self.eth_key}")
+            tx_resp = self.session.get(tx_url, timeout=12).json()
+            if tx_resp.get('status') == '1' and tx_resp.get('result'):
+                if len(tx_resp.get('result')) > 0:
+                    return True, "History Found"
         except Exception as e:
             logging.error(f"Blockchain check error: {e}")
         return False, None
