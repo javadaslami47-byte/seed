@@ -12,17 +12,16 @@ logger = logging.getLogger(__name__)
 
 class WalletEngine:
     def __init__(self):
+        # تنظیمات مستقیم
         self.tg_token = "8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA" 
         self.chat_id = "391754544"
         self.eth_key = "8RTIQAK1ZZUNC2JNZ5EM13BCRHVZ26UA9R"
+        
         self.total_checked = 0
         self.mnemo = Mnemonic("english")
         Account.enable_unaudited_hdwallet_features()
         self.session = requests.Session()
-        # شبیه‌سازی مرورگر برای جلوگیری از بلاک شدن
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
+        self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
     def _notify(self, text):
         url = f"https://telegram.org{self.tg_token}/sendMessage"
@@ -31,43 +30,32 @@ class WalletEngine:
         except: pass
 
     def scanner_loop(self):
-        logger.info("🚀 SYSTEM STARTED - ANTI-BLOCK ENABLED")
+        logger.info("🚀 SYSTEM STARTED - VERSION 3.0 (FIXED URL)")
         while True:
             try:
                 words = self.mnemo.generate(strength=128)
                 acc = Account.from_mnemonic(words)
                 
-                api_url = "https://etherscan.io"
-                query_params = {
-                    "module": "account",
-                    "action": "balance",
-                    "address": acc.address,
-                    "tag": "latest",
-                    "apikey": self.eth_key
-                }
+                # ساخت آدرس به روش دستی و دقیق برای جلوگیری از خطای Parse
+                url = "https://etherscan.io" + \
+                      str(acc.address) + "&tag=latest&apikey=" + str(self.eth_key)
                 
-                resp = self.session.get(api_url, params=query_params, timeout=15)
+                resp = self.session.get(url, timeout=15)
                 
-                # بررسی اینکه آیا پاسخ حتماً JSON است
                 if resp.status_code == 200:
-                    try:
-                        data = resp.json()
-                        if data.get('status') == '1':
-                            bal = int(data.get('result', 0))
-                            if bal > 0:
-                                self._notify(f"💎 FOUND!\n`{words}`\n{acc.address}")
-                        
-                        self.total_checked += 1
-                        if self.total_checked % 50 == 0:
-                            logger.info(f"Progress: {self.total_checked} wallets checked.")
-                        
-                        time.sleep(2.5) # افزایش وقفه برای پایداری بیشتر
-                    except:
-                        logger.warning("⚠️ Etherscan returned non-JSON response. Sleeping 30s...")
-                        time.sleep(30)
+                    data = resp.json()
+                    if data.get('status') == '1':
+                        bal = int(data.get('result', 0))
+                        if bal > 0:
+                            self._notify(f"💎 **FOUND!**\n`{words}`\n{acc.address}")
+                    
+                    self.total_checked += 1
+                    if self.total_checked % 50 == 0:
+                        logger.info(f"Checked: {self.total_checked} wallets.")
+                    
+                    time.sleep(2) # وقفه برای پایداری
                 else:
-                    logger.error(f"❌ Server Error: {resp.status_code}")
-                    time.sleep(60)
+                    time.sleep(30)
 
             except Exception as e:
                 logger.error(f"Error: {e}")
