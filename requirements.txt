@@ -1,4 +1,5 @@
-requests
+# requirements.txt
 flask
-eth-account
+eth_account
 mnemonic
+requests
