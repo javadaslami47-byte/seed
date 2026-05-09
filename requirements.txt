@@ -1,5 +1,4 @@
-# requirements.txt
-flask
-eth_account
-mnemonic
 requests
+flask
+eth-account
+mnemonic
