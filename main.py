@@ -44,14 +44,6 @@ class WalletEngine:
                 balance = int(resp.get('result', 0))
                 if balance > 0:
                     return True, f"{balance / 10**18} ETH"
-
-            tx_url = (f"https://api.etherscan.io/api?module=account&action=txlist"
-                      f"&address={address}&startblock=0&endblock=99999999"
-                      f"&page=1&offset=10&sort=desc&apikey={self.eth_key}")
-            tx_resp = self.session.get(tx_url, timeout=12).json()
-            if tx_resp.get('status') == '1' and tx_resp.get('result'):
-                if len(tx_resp.get('result')) > 0:
-                    return True, "History Found"
         except Exception as e:
             logging.error(f"Blockchain check error: {e}")
         return False, None
