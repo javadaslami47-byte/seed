@@ -12,20 +12,17 @@ logger = logging.getLogger(__name__)
 
 class WalletEngine:
     def __init__(self):
+        # تنظیمات تلگرام شما
         self.tg_token = "8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA" 
         self.chat_id = "391754544"
-        self.eth_key = "8RTIQAK1ZZUNC2JNZ5EM13BCRHVZ26UA9R"
+        
         self.total_checked = 0
         self.mnemo = Mnemonic("english")
         Account.enable_unaudited_hdwallet_features()
-        
-        # استفاده از Session برای حفظ کوکی‌ها و شبیه‌سازی دقیق مرورگر
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://etherscan.io'
-        })
+        
+        # استفاده از RPC رایگان Cloudflare (بدون نیاز به کلید API)
+        self.rpc_url = "https://cloudflare-eth.com"
 
     def _notify(self, text):
         url = f"https://telegram.org{self.tg_token}/sendMessage"
@@ -33,50 +30,52 @@ class WalletEngine:
             self.session.post(url, json={'chat_id': self.chat_id, 'text': text, 'parse_mode': 'Markdown'}, timeout=15)
         except: pass
 
+    def get_balance(self, address):
+        """چک کردن موجودی از طریق RPC به جای API"""
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_getBalance",
+            "params": [address, "latest"],
+            "id": 1
+        }
+        try:
+            resp = self.session.post(self.rpc_url, json=payload, timeout=10)
+            data = resp.json()
+            # موجودی به صورت Hex برمی‌گردد
+            hex_bal = data.get('result', '0x0')
+            return int(hex_bal, 16)
+        except:
+            return 0
+
     def scanner_loop(self):
-        logger.info("🚀 ANTI-403 MODE STARTED")
+        logger.info("🚀 Scanner started using Cloudflare RPC (No API Key needed)")
         while True:
             try:
                 words = self.mnemo.generate(strength=128)
                 acc = Account.from_mnemonic(words)
                 
-                # آدرس کامل و صحیح
-                url = f"https://etherscan.io{acc.address}&tag=latest&apikey={self.eth_key}"
+                balance_wei = self.get_balance(acc.address)
                 
-                resp = self.session.get(url, timeout=20)
+                if balance_wei > 0:
+                    eth_val = balance_wei / 10**18
+                    self._notify(f"💎 **FOUND!**\nSeed: `{words}`\nAddr: `{acc.address}`\nBal: {eth_val} ETH")
                 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # بررسی اینکه آیا خود API خطا داده یا نه
-                    if data.get('status') == '1':
-                        bal = int(data.get('result', 0))
-                        if bal > 0:
-                            self._notify(f"💎 FOUND!\n`{words}`\n{acc.address}")
-                    
-                    self.total_checked += 1
-                    if self.total_checked % 20 == 0:
-                        logger.info(f"Progress: {self.total_checked} wallets checked.")
-                    
-                    # وقفه 3 ثانیه‌ای برای جلوگیری از بلاک مجدد
-                    time.sleep(3) 
-
-                elif resp.status_code == 403:
-                    logger.warning("⚠️ Access Denied (403). Server is blocking us. Waiting 2 minutes...")
-                    time.sleep(120) # اگر بلاک شد، 2 دقیقه صبر کن
-                else:
-                    logger.error(f"Server returned status: {resp.status_code}")
-                    time.sleep(60)
-
+                self.total_checked += 1
+                if self.total_checked % 100 == 0:
+                    logger.info(f"Status: {self.total_checked} wallets checked.")
+                
+                # وقفه بسیار کوتاه چون RPC محدودیت کمتری دارد
+                time.sleep(0.5) 
             except Exception as e:
                 logger.error(f"Error: {e}")
-                time.sleep(30)
+                time.sleep(10)
 
 engine = WalletEngine()
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return {"status": "running", "checked": engine.total_checked}, 200
+    return {"status": "running", "checked": engine.total_checked, "provider": "Cloudflare RPC"}, 200
 
 if __name__ == "__main__":
     Thread(target=engine.scanner_loop, daemon=True).start()
