@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class WalletEngine:
     def __init__(self):
-        # تنظیمات تلگرام شما
+        # تنظیمات تلگرام
         self.tg_token = "8794852622:AAH9p2HSno2YPPIssRE5En0Ii2Wv84E8_pA" 
         self.chat_id = "391754544"
         
@@ -21,7 +21,7 @@ class WalletEngine:
         Account.enable_unaudited_hdwallet_features()
         self.session = requests.Session()
         
-        # استفاده از RPC رایگان Cloudflare (بدون نیاز به کلید API)
+        # استفاده از گره عمومی کلاودفلر (بدون نیاز به کلید اتراسکن)
         self.rpc_url = "https://cloudflare-eth.com"
 
     def _notify(self, text):
@@ -31,7 +31,7 @@ class WalletEngine:
         except: pass
 
     def get_balance(self, address):
-        """چک کردن موجودی از طریق RPC به جای API"""
+        """استعلام موجودی مستقیم از شبکه اتریوم"""
         payload = {
             "jsonrpc": "2.0",
             "method": "eth_getBalance",
@@ -39,21 +39,25 @@ class WalletEngine:
             "id": 1
         }
         try:
+            # ارسال درخواست به RPC کلاودفلر
             resp = self.session.post(self.rpc_url, json=payload, timeout=10)
             data = resp.json()
-            # موجودی به صورت Hex برمی‌گردد
+            # نتیجه به صورت Hex بازگردانده می‌شود
             hex_bal = data.get('result', '0x0')
             return int(hex_bal, 16)
-        except:
+        except Exception as e:
+            logger.error(f"RPC Error: {e}")
             return 0
 
     def scanner_loop(self):
-        logger.info("🚀 Scanner started using Cloudflare RPC (No API Key needed)")
+        logger.info("🚀 SYSTEM STARTED - USING CLOUDFLARE RPC")
         while True:
             try:
+                # تولید کلمات و آدرس
                 words = self.mnemo.generate(strength=128)
                 acc = Account.from_mnemonic(words)
                 
+                # چک کردن موجودی (Wei)
                 balance_wei = self.get_balance(acc.address)
                 
                 if balance_wei > 0:
@@ -62,12 +66,12 @@ class WalletEngine:
                 
                 self.total_checked += 1
                 if self.total_checked % 100 == 0:
-                    logger.info(f"Status: {self.total_checked} wallets checked.")
+                    logger.info(f"Checked: {self.total_checked} wallets")
                 
-                # وقفه بسیار کوتاه چون RPC محدودیت کمتری دارد
+                # وقفه بسیار کوتاه (RPC محدودیت کمتری دارد)
                 time.sleep(0.5) 
             except Exception as e:
-                logger.error(f"Error: {e}")
+                logger.error(f"Scanner Error: {e}")
                 time.sleep(10)
 
 engine = WalletEngine()
@@ -75,7 +79,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return {"status": "running", "checked": engine.total_checked, "provider": "Cloudflare RPC"}, 200
+    return {"status": "running", "total": engine.total_checked, "node": "Cloudflare"}, 200
 
 if __name__ == "__main__":
     Thread(target=engine.scanner_loop, daemon=True).start()
